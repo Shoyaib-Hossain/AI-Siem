@@ -1,0 +1,196 @@
+name: siem-architecture
+
+networks:
+  kafka-net:
+    driver: bridge
+
+volumes:
+  es-data:
+    driver: local
+  kafka-data:
+    driver: local
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_MAX_CLIENT_CNXNS: 0
+      ZOOKEEPER_JUTE_MAXBUFFER: 4194304
+    networks:
+      - kafka-net
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_MESSAGE_MAX_BYTES: 1000000000
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 1000000000
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 1500000000
+      # Memory optimization - increase Kafka heap from default 1G to 2G
+      KAFKA_HEAP_OPTS: "-Xmx2G -Xms2G"
+      # Additional JVM performance optimizations for SIEM workloads
+      KAFKA_JVM_PERFORMANCE_OPTS: "-server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ExplicitGCInvokesConcurrent -Djava.awt.headless=true"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - kafka-net
+    restart: on-failure
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.14.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    networks:
+      - kafka-net
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.14.0
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    networks:
+      - kafka-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: on-failure
+
+  log_ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: log_ingestion
+    ports:
+      - "8000:5000"
+    environment:
+      - FLASK_APP=siem_architecture.py
+      - FLASK_RUN_PORT=5000
+      - SERVICE_NAME=log_ingestion
+      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - KAFKA_HOST=kafka:9092
+    command: ["flask", "run", "--host=0.0.0.0"]
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka
+      - elasticsearch
+    restart: on-failure
+
+  anomaly_detection:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: anomaly_detection
+    ports:
+      - "8001:5001"
+    environment:
+      - FLASK_APP=siem_architecture.py
+      - FLASK_RUN_PORT=5001
+      - SERVICE_NAME=anomaly_detection
+      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - KAFKA_HOST=kafka:9092
+    command: ["python", "siem_architecture.py"]
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka
+      - elasticsearch
+    restart: on-failure
+
+  alert_correlation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alert_correlation
+    ports:
+      - "8002:5002"
+    environment:
+      - FLASK_APP=siem_architecture.py
+      - FLASK_RUN_PORT=5002
+      - SERVICE_NAME=alert_correlation
+      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - KAFKA_HOST=kafka:9092
+    command: ["python", "siem_architecture.py"]
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka
+      - elasticsearch
+    restart: on-failure
+
+  siem_dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: siem_dashboard
+    ports:
+      - "3000:5000"  # Fixed: Maps localhost:3000 to container:5000
+    environment:
+      - FLASK_APP=dashboard.py
+      - FLASK_RUN_PORT=5000  # Fixed: Changed from 3000 to 5000 to match Python code
+      - SERVICE_NAME=dashboard
+      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - KAFKA_HOST=kafka:9092
+    command: ["python", "dashboard.py"]
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka
+      - elasticsearch
+    restart: on-failure
+
+  # NEW: Automated Log Collector Service (Simplified)
+  # Fixed Log Collector Service
+  log_collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.logcollector
+    container_name: log_collector
+    environment:
+      # Use internal Docker network to reach dashboard
+      - DASHBOARD_URL=http://siem_dashboard:5000
+    networks:
+      - kafka-net
+    depends_on:
+      - siem_dashboard
+    restart: on-failure
+    command: ["python", "/app/real_log_collector.py"]

@@ -1,0 +1,23 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies for network monitoring
+RUN apt-get update && apt-get install -y \
+    net-tools \
+    curl \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir psutil requests kafka-python
+
+# Copy log collector scripts
+COPY mac_host_logs.py /app/
+COPY real_log_collector.py /app/
+
+# Make scripts executable
+RUN chmod +x /app/*.py
+
+# Default command (can be overridden in docker-compose)
+CMD ["python", "/app/real_log_collector.py"]
