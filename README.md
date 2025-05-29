@@ -91,30 +91,6 @@ Raw Data    [Features Array]    Random Partitioning    0.0-1.0    Threshold Chec
 
  Performance Metrics
 
-1. Model Effectiveness
-   - False Positive Rate
-   - Detection Rate
-   - Processing Time
+On localhost:3000 dashboard looks like :
 
-2. Resource Usage
-   - Memory: ~100MB
-   - CPU: Low impact
-   - Batch processing efficiency
-
- Advantages
-
-1. Unsupervised Learning
-   - No need for labeled training data
-   - Adapts to changing patterns
-   - Works with varied log types
-
-2. Efficiency
-   - Fast training and prediction
-   - Low memory footprint
-   - Scalable to large datasets
-
-3. Interpretability
-   - Clear anomaly scores
-   - Feature importance analysis
-   - Explainable decisions
-
+<img width="452" alt="image" src="https://github.com/Shoyaib-Hossain/AI-Siem/blob/main/Image%2029-05-2025%20at%2014.18.jpeg" />
